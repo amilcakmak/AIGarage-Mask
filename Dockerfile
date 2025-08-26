@@ -11,6 +11,8 @@ RUN apt-get update && apt-get install -y \
     libxext6 \
     libxrender-dev \
     libgomp1 \
+    wget \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Açıklama: Çalışma dizinini ayarla
