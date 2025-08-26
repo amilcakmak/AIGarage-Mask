@@ -29,4 +29,4 @@ COPY . .
 EXPOSE 10000
 
 # Açıklama: Uygulamayı başlat
-CMD ["gunicorn", "--bind", "0.0.0.0:10000", "image-masker:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:10000", "--timeout", "300", "--workers", "1", "--preload", "image-masker:app"]

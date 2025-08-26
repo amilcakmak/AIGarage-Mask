@@ -37,21 +37,34 @@ def load_models():
     try:
         logger.info("Loading YOLO model...")
         yolo_model = YOLO('yolov8n.pt')
+        logger.info("YOLO model loaded successfully!")
         
         logger.info("Loading SAM model...")
         # SAM model dosyasını indir (eğer yoksa)
         sam_checkpoint = "sam_vit_h_4b8939.pth"
         if not os.path.exists(sam_checkpoint):
-            logger.info("Downloading SAM model...")
+            logger.info("Downloading SAM model (2.4GB)...")
             url = "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth"
-            response = requests.get(url)
+            response = requests.get(url, stream=True)
+            total_size = int(response.headers.get('content-length', 0))
+            downloaded = 0
+            
             with open(sam_checkpoint, "wb") as f:
-                f.write(response.content)
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if total_size > 0:
+                            progress = (downloaded / total_size) * 100
+                            logger.info(f"SAM download progress: {progress:.1f}%")
+            
+            logger.info("SAM model download completed!")
         
+        logger.info("Initializing SAM model...")
         sam_model = sam_model_registry["vit_h"](checkpoint=sam_checkpoint)
         sam_predictor = SamPredictor(sam_model)
         
-        logger.info("Models loaded successfully!")
+        logger.info("All models loaded successfully!")
         return True
         
     except Exception as e:
@@ -189,10 +202,16 @@ def create_fallback_mask(image_bytes):
 @app.route('/health', methods=['GET'])
 def health_check():
     try:
+        # Açıklama: Model durumunu kontrol et
+        models_loaded = yolo_model is not None and sam_predictor is not None
+        
         return jsonify({
-            'status': 'healthy',
+            'status': 'healthy' if models_loaded else 'loading',
             'timestamp': datetime.now().isoformat(),
-            'message': 'AI Garage Masking API is running'
+            'message': 'AI Garage Masking API is running',
+            'models_loaded': models_loaded,
+            'yolo_ready': yolo_model is not None,
+            'sam_ready': sam_predictor is not None
         })
     except Exception as e:
         logger.error(f"Health check error: {e}")
