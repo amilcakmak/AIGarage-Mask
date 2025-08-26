@@ -1,5 +1,5 @@
 # Dosya: requirements.txt
-# Açıklama: Render deployment için Python bağımlılıkları - SAM + YOLO
+# Açıklama: Render deployment için Python bağımlılıkları - SAM + YOLO + Telegram
 
 Flask==2.3.3
 Flask-CORS==4.0.0
@@ -13,3 +13,4 @@ torchvision==0.21.0
 ultralytics==8.0.196
 segment-anything==1.0
 Pillow>=10.0.0
+python-telegram-bot==20.7

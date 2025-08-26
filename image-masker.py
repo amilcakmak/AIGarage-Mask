@@ -1,5 +1,5 @@
 # Dosya: image-masker.py
-# Açıklama: Flask API sunucusu - SAM + YOLO ile gelişmiş maskeleme
+# Açıklama: Flask API sunucusu - SAM + YOLO ile gelişmiş maskeleme + Telegram Bot
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -15,6 +15,11 @@ from segment_anything import sam_model_registry, SamPredictor
 import requests
 from PIL import Image
 import io
+import telegram
+import asyncio
+import threading
+import signal
+import sys
 
 # Açıklama: Flask uygulamasını başlat
 app = Flask(__name__)
@@ -28,6 +33,17 @@ logger = logging.getLogger(__name__)
 yolo_model = None
 sam_predictor = None
 sam_model = None
+
+# Açıklama: Telegram bot ayarları
+TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
+TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
+bot = None
+if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+    bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
+
+# Açıklama: İstatistik değişkenleri
+request_count = 0
+start_time = datetime.now()
 
 # Açıklama: Model yükleme fonksiyonu
 def load_models():
@@ -70,6 +86,54 @@ def load_models():
     except Exception as e:
         logger.error(f"Model loading error: {e}")
         return False
+
+# Açıklama: Telegram bildirim fonksiyonu
+def send_telegram_message(message):
+    """Telegram'a mesaj gönder"""
+    if bot and TELEGRAM_CHAT_ID:
+        try:
+            # Açıklama: Async fonksiyonu sync olarak çalıştır
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message))
+            loop.close()
+            logger.info(f"Telegram message sent: {message}")
+        except Exception as e:
+            logger.error(f"Telegram send error: {e}")
+
+# Açıklama: Sunucu durumu bildirimleri
+def notify_server_start():
+    """Sunucu başladığında bildirim gönder"""
+    message = f"🚀 AI Garage Masking API başlatıldı!\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n🌐 https://ai-garage-masking-api.onrender.com"
+    send_telegram_message(message)
+
+def notify_server_error(error_msg):
+    """Sunucu hatası bildirimi"""
+    message = f"❌ AI Garage Masking API Hatası!\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n🔍 Hata: {error_msg}"
+    send_telegram_message(message)
+
+def notify_user_activity(device_id, success=True):
+    """Kullanıcı aktivitesi bildirimi"""
+    global request_count
+    request_count += 1
+    
+    status = "✅ Başarılı" if success else "❌ Başarısız"
+    uptime = datetime.now() - start_time
+    uptime_str = str(uptime).split('.')[0]  # Mikrosaniyeleri kaldır
+    
+    message = f"👤 Kullanıcı Aktivitesi\n{status} - {device_id}\n📊 Toplam İstek: {request_count}\n⏱️ Uptime: {uptime_str}"
+    send_telegram_message(message)
+
+# Açıklama: Signal handler - sunucu kapanırken
+def signal_handler(signum, frame):
+    """Sunucu kapanırken bildirim gönder"""
+    message = f"🛑 AI Garage Masking API kapatılıyor!\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n📊 Toplam İstek: {request_count}"
+    send_telegram_message(message)
+    sys.exit(0)
+
+# Açıklama: Signal handler'ları kaydet
+signal.signal(signal.SIGTERM, signal_handler)
+signal.signal(signal.SIGINT, signal_handler)
 
 # Açıklama: SAM + YOLO ile gelişmiş maskeleme fonksiyonu
 def create_mask_with_sam_yolo(image_bytes):
@@ -241,6 +305,7 @@ def mask_image():
             logger.info(f"Decoded image size: {len(image_bytes)} bytes")
         except Exception as e:
             logger.error(f"Base64 decode error: {e}")
+            notify_server_error(f"Base64 decode error: {e}")
             return jsonify({'success': False, 'error': 'Invalid base64 data'}), 400
 
         # Açıklama: SAM + YOLO ile maskeleme yap
@@ -267,14 +332,17 @@ def mask_image():
             }
 
             logger.info(f"Masking completed successfully for device: {device_id}")
+            notify_user_activity(device_id, success=True)
             return jsonify(response)
 
         except Exception as e:
             logger.error(f"SAM+YOLO processing error: {e}")
+            notify_server_error(f"SAM+YOLO processing error: {e}")
             return jsonify({'success': False, 'error': f'Processing error: {str(e)}'}), 500
 
     except Exception as e:
         logger.error(f"Masking error: {e}")
+        notify_server_error(f"General masking error: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 # Açıklama: Durum endpoint'i
@@ -316,8 +384,10 @@ if __name__ == '__main__':
     logger.info("Loading AI models...")
     if load_models():
         logger.info("Models loaded successfully!")
+        notify_server_start()
     else:
         logger.warning("Failed to load models, will use fallback OpenCV method")
+        notify_server_error("Failed to load AI models")
 
     # Açıklama: Port ayarı
     port = int(os.environ.get('PORT', 5000))
