@@ -1,5 +1,5 @@
 # Dosya: image-masker.py
-# Açıklama: Flask API sunucusu - SAM + YOLO ile gelişmiş maskeleme + Telegram Bot
+# Açıklama: Flask API sunucusu - YOLO + OpenCV ile optimize edilmiş maskeleme + Telegram Bot
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -27,10 +27,8 @@ CORS(app)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Açıklama: Global model değişkenleri
+# Açıklama: Global model değişkeni
 yolo_model = None
-sam_predictor = None
-sam_model = None
 
 # Açıklama: Telegram bot ayarları
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
@@ -59,55 +57,35 @@ heartbeat_count = 0
 # Açıklama: Model yükleme fonksiyonu
 def load_models():
     """Sadece YOLO modelini yükle (RAM sınırı nedeniyle)"""
-    global yolo_model, sam_predictor, sam_model
-    
+    global yolo_model
     try:
         logger.info("Loading YOLO model only (RAM limit: 512MB)...")
         yolo_model = YOLO('yolov8n.pt')
         logger.info("YOLO model loaded successfully!")
-        
-        # Açıklama: SAM modeli RAM sınırı nedeniyle atlanıyor
-        logger.warning("SAM model skipped - RAM limit exceeded (512MB)")
-        logger.info("Using YOLO + OpenCV bounding box combination")
-        
-        sam_predictor = None
-        sam_model = None
-        
-        logger.info("YOLO model loaded successfully!")
         return True
-        
     except Exception as e:
-        logger.error(f"Model loading error: {e}")
-        logger.info("Falling back to OpenCV only")
+        logger.error(f"Error loading YOLO model: {e}")
         return False
 
-# Açıklama: Telegram bildirim fonksiyonu
+# --- Telegram Bildirim Fonksiyonları ---
 def send_telegram_message(message):
-    """Telegram'a mesaj gönder"""
-    if not bot:
-        logger.warning("Telegram bot not available - message not sent")
-        return False
-    
-    if not TELEGRAM_CHAT_ID:
-        logger.warning("Telegram chat ID not set - message not sent")
-        return False
-    
-    try:
-        # Açıklama: Async fonksiyonu sync olarak çalıştır
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message))
-        loop.close()
-        logger.info(f"Telegram message sent successfully: {message[:50]}...")
-        return True
-    except Exception as e:
-        logger.error(f"Telegram send error: {e}")
-        return False
+    """Telegram'a asenkron mesaj gönder"""
+    if bot:
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message))
+            loop.close()
+            return True
+        except Exception as e:
+            logger.error(f"Telegram message failed: {e}")
+            return False
+    return False
 
-# Açıklama: Sunucu durumu bildirimleri
 def notify_server_start():
-    """Sunucu başladığında bildirim gönder"""
-    message = f"🚀 AI Garage Masking API başlatıldı!\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n🌐 https://ai-garage-masking-api.onrender.com"
+    """Sunucu başlangıç bildirimi"""
+    hostname = os.environ.get('RENDER_EXTERNAL_URL', 'Not available')
+    message = f"🚀 AI Garage Masking API başlatıldı!\n⏰ {start_time.strftime('%Y-%m-%d %H:%M:%S')}\n🌐 {hostname}"
     send_telegram_message(message)
 
 def notify_server_error(error_msg):
@@ -119,23 +97,10 @@ def notify_user_activity(device_id, success=True):
     """Kullanıcı aktivitesi bildirimi"""
     global request_count
     request_count += 1
-    
     status = "✅ Başarılı" if success else "❌ Başarısız"
     uptime = datetime.now() - start_time
-    uptime_str = str(uptime).split('.')[0]  # Mikrosaniyeleri kaldır
-    
+    uptime_str = str(uptime).split('.')[0]
     message = f"👤 Kullanıcı Aktivitesi\n{status} - {device_id}\n📊 Toplam İstek: {request_count}\n⏱️ Uptime: {uptime_str}"
-    send_telegram_message(message)
-
-def notify_heartbeat():
-    """Sunucu heartbeat bildirimi (her 1 dakikada)"""
-    global heartbeat_count
-    heartbeat_count += 1
-    
-    uptime = datetime.now() - start_time
-    uptime_str = str(uptime).split('.')[0]  # Mikrosaniyeleri kaldır
-    
-    message = f"💓 Sunucu Aktif!\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n📊 Toplam İstek: {request_count}\n💓 Heartbeat: {heartbeat_count}\n⏱️ Uptime: {uptime_str}\n🌐 https://ai-garage-masking-api.onrender.com"
     send_telegram_message(message)
 
 # Açıklama: Signal handler - sunucu kapanırken
@@ -150,60 +115,43 @@ signal.signal(signal.SIGTERM, signal_handler)
 signal.signal(signal.SIGINT, signal_handler)
 
 # Açıklama: YOLO + OpenCV ile maskeleme fonksiyonu
-def create_mask_with_sam_yolo(image_bytes):
-    """YOLO + OpenCV ile araç maskeleme (RAM sınırı nedeniyle)"""
+def create_mask_with_yolo_opencv(image_bytes):
+    """YOLO + OpenCV ile araç maskeleme (RAM optimizasyonlu)"""
     try:
-        # Açıklama: Model kontrolü
         if yolo_model is None:
             logger.error("YOLO model is not loaded!")
             return create_fallback_mask(image_bytes)
-        
-        # Açıklama: Bytes'i PIL Image'e çevir
+
         image = Image.open(io.BytesIO(image_bytes))
         image_np = np.array(image)
-        
         logger.info(f"Processing image with size: {image_np.shape}")
-        
-        # Açıklama: YOLO ile araç tespiti
-        results = yolo_model(image_np, classes=[2, 3, 5, 7])  # car, motorcycle, bus, truck
-        
+
+        results = yolo_model(image_np, classes=[2, 3, 5, 7]) # car, motorcycle, bus, truck
         if not results or len(results[0].boxes) == 0:
             logger.warning("No vehicles detected, using fallback OpenCV method")
             return create_fallback_mask(image_bytes)
-        
-        # Açıklama: En büyük araç için bounding box maskeleme
+
         largest_vehicle = None
         max_area = 0
-        
         for result in results:
-            boxes = result.boxes
-            for box in boxes:
-                # Açıklama: Bounding box koordinatları
+            for box in result.boxes:
                 x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
                 area = (x2 - x1) * (y2 - y1)
-                
                 if area > max_area:
                     max_area = area
                     largest_vehicle = (x1, y1, x2, y2)
-        
+
         if largest_vehicle:
             x1, y1, x2, y2 = largest_vehicle
-            
-            # Açıklama: Bounding box'ı maske olarak kullan
             height, width = image_np.shape[:2]
             mask = np.zeros((height, width), dtype=np.uint8)
-            
-            # Açıklama: Bounding box'ı doldur
             cv2.rectangle(mask, (int(x1), int(y1)), (int(x2), int(y2)), 255, -1)
             
-            # Açıklama: Morphological operations ile maskeyi iyileştir
             kernel = np.ones((5, 5), np.uint8)
             mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
             mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
             
-            # Açıklama: Maskeyi 3 kanala genişlet
             mask_3channel = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
-            
             logger.info(f"YOLO+OpenCV mask created successfully with shape: {mask_3channel.shape}")
             return mask_3channel
         else:
@@ -219,104 +167,51 @@ def create_mask_with_sam_yolo(image_bytes):
 def create_fallback_mask(image_bytes):
     """OpenCV ile basit maskeleme algoritması (fallback)"""
     try:
-        # Açıklama: Bytes'i numpy array'e çevir
         nparr = np.frombuffer(image_bytes, np.uint8)
         image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-
-        if image is None:
-            raise Exception("Could not decode image")
-
-        # Açıklama: Gri tonlamaya çevir
+        if image is None: raise Exception("Could not decode image")
+        
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-
-        # Açıklama: Gürültü azaltma
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-
-        # Açıklama: Canny kenar tespiti
         edges = cv2.Canny(blurred, 50, 150)
-
-        # Açıklama: Morphological operations ile maskeyi iyileştir
+        
         kernel = np.ones((3, 3), np.uint8)
         dilated = cv2.dilate(edges, kernel, iterations=2)
         eroded = cv2.erode(dilated, kernel, iterations=1)
-
-        # Açıklama: Contour bulma ve en büyük alanı maskeleme
+        
         contours, _ = cv2.findContours(eroded, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
         if contours:
-            # Açıklama: En büyük contour'u bul
             largest_contour = max(contours, key=cv2.contourArea)
-
-            # Açıklama: Boş maske oluştur
             mask = np.zeros_like(gray)
-
-            # Açıklama: Contour'u doldur
             cv2.drawContours(mask, [largest_contour], 0, 255, -1)
-
-            # Açıklama: Morphological closing ile maskeyi iyileştir
             mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
-
-            # Açıklama: Maskeyi 3 kanala genişlet
             mask_3channel = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
-
             return mask_3channel
         else:
-            # Açıklama: Contour bulunamazsa basit bir dikdörtgen maskesi oluştur
             height, width = gray.shape
             mask = np.zeros((height, width), dtype=np.uint8)
             cv2.rectangle(mask, (int(width*0.1), int(height*0.1)), (int(width*0.9), int(height*0.9)), 255, -1)
             mask_3channel = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
             return mask_3channel
-
     except Exception as e:
         logger.error(f"Fallback OpenCV masking error: {e}")
         raise
-
-# Açıklama: Sağlık kontrolü endpoint'i
-@app.route('/health', methods=['GET'])
-def health_check():
-    try:
-        # Açıklama: Model durumunu kontrol et
-        models_loaded = yolo_model is not None and sam_predictor is not None
-        
-        # Açıklama: Detaylı model durumu
-        yolo_status = "loaded" if yolo_model is not None else "not_loaded"
-        sam_status = "loaded" if sam_predictor is not None else "not_loaded"
-        
-        return jsonify({
-            'status': 'healthy' if models_loaded else 'loading',
-            'timestamp': datetime.now().isoformat(),
-            'message': 'AI Garage Masking API is running',
-            'models_loaded': models_loaded,
-            'yolo_ready': yolo_model is not None,
-            'sam_ready': sam_predictor is not None,
-            'yolo_status': yolo_status,
-            'sam_status': sam_status,
-            'fallback_available': True
-        })
-    except Exception as e:
-        logger.error(f"Health check error: {e}")
-        return jsonify({'status': 'unhealthy', 'error': str(e)}), 500
 
 # Açıklama: Maskeleme endpoint'i
 @app.route('/mask', methods=['POST'])
 def mask_image():
     try:
-        # Açıklama: JSON verisini al
         data = request.get_json()
         if not data or 'image' not in data:
             return jsonify({'success': False, 'error': 'No image data provided'}), 400
-
+        
         device_id = data.get('device_id', 'unknown_device')
         base64_image = data['image']
-
         logger.info(f"Processing mask request from device: {device_id}")
 
-        # Açıklama: Base64 verisini kontrol et
         if not base64_image or len(base64_image) < 100:
             return jsonify({'success': False, 'error': 'Invalid image data'}), 400
 
-        # Açıklama: Base64'ü decode et
         try:
             image_bytes = base64.b64decode(base64_image)
             logger.info(f"Decoded image size: {len(image_bytes)} bytes")
@@ -325,36 +220,32 @@ def mask_image():
             notify_server_error(f"Base64 decode error: {e}")
             return jsonify({'success': False, 'error': 'Invalid base64 data'}), 400
 
-        # Açıklama: SAM + YOLO ile maskeleme yap
         try:
-            mask_image = create_mask_with_sam_yolo(image_bytes)
-
-            # Açıklama: Maskeyi base64'e çevir
+            # Optimize edilmiş fonksiyonu çağır
+            mask_image = create_mask_with_yolo_opencv(image_bytes)
+            
             success, encoded_mask = cv2.imencode('.png', mask_image)
             if not success:
                 raise Exception("Could not encode mask image")
-
+            
             mask_base64 = base64.b64encode(encoded_mask.tobytes()).decode('utf-8')
-
             logger.info(f"Mask encoding completed, base64 length: {len(mask_base64)}")
-
-            # Açıklama: Başarılı yanıt
+            
             response = {
                 'success': True,
                 'mask': mask_base64,
-                'message': f'SAM+YOLO vehicle masking completed for {device_id}',
+                'message': f'YOLO+OpenCV vehicle masking completed for {device_id}',
                 'processing_time': datetime.now().isoformat(),
                 'mask_shape': mask_image.shape,
-                'algorithm': 'SAM_YOLO_Vehicle_Detection'
+                'algorithm': 'YOLO_OpenCV_Vehicle_Detection'
             }
-
             logger.info(f"Masking completed successfully for device: {device_id}")
             notify_user_activity(device_id, success=True)
             return jsonify(response)
-
+        
         except Exception as e:
-            logger.error(f"SAM+YOLO processing error: {e}")
-            notify_server_error(f"SAM+YOLO processing error: {e}")
+            logger.error(f"Processing error: {e}")
+            notify_server_error(f"Processing error: {e}")
             return jsonify({'success': False, 'error': f'Processing error: {str(e)}'}), 500
 
     except Exception as e:
@@ -362,96 +253,43 @@ def mask_image():
         notify_server_error(f"General masking error: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
-# Açıklama: Durum endpoint'i
-@app.route('/status', methods=['GET'])
-def get_status():
-    try:
-        return jsonify({
-            'status': 'running',
-            'timestamp': datetime.now().isoformat(),
-            'version': '1.0.0',
-            'message': 'AI Garage Masking API is operational'
-        })
-    except Exception as e:
-        logger.error(f"Status check error: {e}")
-        return jsonify({'status': 'error', 'error': str(e)}), 500
+# Açıklama: Diğer endpoint'ler
+@app.route('/health', methods=['GET'])
+def health_check():
+    yolo_status = "loaded" if yolo_model is not None else "not_loaded"
+    return jsonify({
+        'status': 'healthy' if yolo_model else 'loading',
+        'timestamp': datetime.now().isoformat(),
+        'message': 'AI Garage Masking API is running',
+        'yolo_ready': yolo_model is not None,
+        'fallback_available': True
+    })
 
-# Açıklama: Heartbeat endpoint'i
-@app.route('/heartbeat', methods=['GET'])
-def heartbeat():
-    """Sunucu heartbeat endpoint'i"""
-    try:
-        notify_heartbeat()
-        return jsonify({
-            'success': True,
-            'message': 'Heartbeat sent',
-            'heartbeat_count': heartbeat_count,
-            'request_count': request_count,
-            'uptime': str(datetime.now() - start_time).split('.')[0]
-        })
-    except Exception as e:
-        logger.error(f"Heartbeat error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-# Açıklama: Test endpoint'i
-@app.route('/test-telegram', methods=['GET'])
-def test_telegram():
-    """Telegram bot test endpoint'i"""
-    try:
-        message = f"🧪 Test mesajı!\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n🌐 AI Garage Masking API"
-        success = send_telegram_message(message)
-        
-        return jsonify({
-            'success': success,
-            'message': 'Telegram test completed',
-            'bot_configured': bot is not None,
-            'chat_id_set': bool(TELEGRAM_CHAT_ID),
-            'token_set': bool(TELEGRAM_BOT_TOKEN)
-        })
-    except Exception as e:
-        logger.error(f"Telegram test error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-# Açıklama: Ana endpoint
 @app.route('/', methods=['GET'])
 def home():
     return jsonify({
-        'message': 'AI Garage - Image Masking API',
-        'version': '1.0.0',
+        'message': 'AI Garage - Image Masking API (Optimized)',
+        'version': '1.1.0',
         'status': 'running',
         'endpoints': {
             'health': '/health',
             'mask': '/mask',
-            'status': '/status',
-            'heartbeat': '/heartbeat',
-            'test_telegram': '/test-telegram'
-        },
-        'note': 'SAM+YOLO-based vehicle masking with fallback to OpenCV'
+        }
     })
 
 # Açıklama: Uygulama başlatma
 if __name__ == '__main__':
-    # Açıklama: Flask ayarları
     app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
-    app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB
-
-    # Açıklama: Modelleri yükle
-    logger.info("Loading AI models...")
-    models_loaded = load_models()
+    app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024 # 50MB
     
-    if models_loaded:
+    logger.info("Loading AI models...")
+    if load_models():
         logger.info("Models loaded successfully!")
-        logger.info(f"YOLO model: {'loaded' if yolo_model else 'not loaded'}")
-        logger.info(f"SAM predictor: {'loaded' if sam_predictor else 'not loaded'}")
         notify_server_start()
     else:
         logger.warning("Failed to load models, will use fallback OpenCV method")
-        logger.info("Server will work with OpenCV fallback only")
         notify_server_error("Failed to load AI models")
-
-    # Açıklama: Port ayarı
+        
     port = int(os.environ.get('PORT', 5000))
-
-    # Açıklama: Uygulamayı başlat
     logger.info(f"Starting AI Garage Masking API on port {port}")
-    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
+    app.run(host='0.0.0.0', port=port, debug=False)
