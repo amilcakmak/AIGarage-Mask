@@ -17,7 +17,6 @@ from PIL import Image
 import io
 import telegram
 import asyncio
-import threading
 import signal
 import sys
 
@@ -56,6 +55,7 @@ else:
 # Açıklama: İstatistik değişkenleri
 request_count = 0
 start_time = datetime.now()
+heartbeat_count = 0
 
 # Açıklama: Model yükleme fonksiyonu
 def load_models():
@@ -143,6 +143,17 @@ def notify_user_activity(device_id, success=True):
     uptime_str = str(uptime).split('.')[0]  # Mikrosaniyeleri kaldır
     
     message = f"👤 Kullanıcı Aktivitesi\n{status} - {device_id}\n📊 Toplam İstek: {request_count}\n⏱️ Uptime: {uptime_str}"
+    send_telegram_message(message)
+
+def notify_heartbeat():
+    """Sunucu heartbeat bildirimi (her 1 dakikada)"""
+    global heartbeat_count
+    heartbeat_count += 1
+    
+    uptime = datetime.now() - start_time
+    uptime_str = str(uptime).split('.')[0]  # Mikrosaniyeleri kaldır
+    
+    message = f"💓 Sunucu Aktif!\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n📊 Toplam İstek: {request_count}\n💓 Heartbeat: {heartbeat_count}\n⏱️ Uptime: {uptime_str}\n🌐 https://ai-garage-masking-api.onrender.com"
     send_telegram_message(message)
 
 # Açıklama: Signal handler - sunucu kapanırken
@@ -396,6 +407,23 @@ def get_status():
         logger.error(f"Status check error: {e}")
         return jsonify({'status': 'error', 'error': str(e)}), 500
 
+# Açıklama: Heartbeat endpoint'i
+@app.route('/heartbeat', methods=['GET'])
+def heartbeat():
+    """Sunucu heartbeat endpoint'i"""
+    try:
+        notify_heartbeat()
+        return jsonify({
+            'success': True,
+            'message': 'Heartbeat sent',
+            'heartbeat_count': heartbeat_count,
+            'request_count': request_count,
+            'uptime': str(datetime.now() - start_time).split('.')[0]
+        })
+    except Exception as e:
+        logger.error(f"Heartbeat error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 # Açıklama: Test endpoint'i
 @app.route('/test-telegram', methods=['GET'])
 def test_telegram():
@@ -426,6 +454,7 @@ def home():
             'health': '/health',
             'mask': '/mask',
             'status': '/status',
+            'heartbeat': '/heartbeat',
             'test_telegram': '/test-telegram'
         },
         'note': 'SAM+YOLO-based vehicle masking with fallback to OpenCV'
