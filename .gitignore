@@ -1,0 +1,46 @@
+# Dosya: .gitignore
+# Açıklama: Büyük model dosyalarını ve cache'leri hariç tut
+
+# Model dosyaları
+*.pth
+*.pt
+*.onnx
+*.tflite
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environment
+venv/
+env/
+.venv/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Log files
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+
+# SAM model files
+sam_vit_*.pth
+
+# YOLO model files
+yolov*.pt
+
+# Downloaded models
+models/
+downloads/
