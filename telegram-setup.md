@@ -69,3 +69,4 @@ TELEGRAM_CHAT_ID=123456789
 - Bot token'ını kimseyle paylaşmayın
 - Chat ID'yi güvenli tutun
 - Sadece güvendiğiniz kişileri bot'a ekleyin
+

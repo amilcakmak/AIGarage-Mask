@@ -139,6 +139,15 @@ signal.signal(signal.SIGINT, signal_handler)
 def create_mask_with_sam_yolo(image_bytes):
     """SAM + YOLO ile araç maskeleme"""
     try:
+        # Açıklama: Model kontrolü
+        if yolo_model is None:
+            logger.error("YOLO model is not loaded!")
+            return create_fallback_mask(image_bytes)
+        
+        if sam_predictor is None:
+            logger.error("SAM predictor is not loaded!")
+            return create_fallback_mask(image_bytes)
+        
         # Açıklama: Bytes'i PIL Image'e çevir
         image = Image.open(io.BytesIO(image_bytes))
         image_np = np.array(image)
@@ -269,13 +278,20 @@ def health_check():
         # Açıklama: Model durumunu kontrol et
         models_loaded = yolo_model is not None and sam_predictor is not None
         
+        # Açıklama: Detaylı model durumu
+        yolo_status = "loaded" if yolo_model is not None else "not_loaded"
+        sam_status = "loaded" if sam_predictor is not None else "not_loaded"
+        
         return jsonify({
             'status': 'healthy' if models_loaded else 'loading',
             'timestamp': datetime.now().isoformat(),
             'message': 'AI Garage Masking API is running',
             'models_loaded': models_loaded,
             'yolo_ready': yolo_model is not None,
-            'sam_ready': sam_predictor is not None
+            'sam_ready': sam_predictor is not None,
+            'yolo_status': yolo_status,
+            'sam_status': sam_status,
+            'fallback_available': True
         })
     except Exception as e:
         logger.error(f"Health check error: {e}")
@@ -382,11 +398,16 @@ if __name__ == '__main__':
 
     # Açıklama: Modelleri yükle
     logger.info("Loading AI models...")
-    if load_models():
+    models_loaded = load_models()
+    
+    if models_loaded:
         logger.info("Models loaded successfully!")
+        logger.info(f"YOLO model: {'loaded' if yolo_model else 'not loaded'}")
+        logger.info(f"SAM predictor: {'loaded' if sam_predictor else 'not loaded'}")
         notify_server_start()
     else:
         logger.warning("Failed to load models, will use fallback OpenCV method")
+        logger.info("Server will work with OpenCV fallback only")
         notify_server_error("Failed to load AI models")
 
     # Açıklama: Port ayarı
