@@ -1,15 +1,15 @@
-# Dosya: requirements.txt
-# Açıklama: Render deployment için Python bağımlılıkları - YOLO + OpenCV + Telegram
+#Açıklama: Render deployment için optimize edilmiş Python bağımlılıkları
+#Sadece CPU destekli PyTorch versiyonları (Daha az RAM kullanır)
+torch --index-url https://download.pytorch.org/whl/cpu
+torchvision --index-url https://download.pytorch.org/whl/cpu
 
-Flask==2.3.3
-Flask-CORS==4.0.0
-opencv-python-headless==4.8.1.78
-numpy==1.26.4
-gunicorn==21.2.0
-setuptools==69.5.1
-wheel==0.43.0
-torch==2.6.0
-torchvision==0.21.0
-ultralytics==8.0.196
-Pillow>=10.0.0
-python-telegram-bot==20.7
+#Diğer gerekli kütüphaneler
+ultralytics
+numpy
+opencv-python-headless
+Flask
+requests
+gunicorn
+python-telegram-bot
+Pillow
+flask-cors
