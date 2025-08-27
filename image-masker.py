@@ -38,8 +38,20 @@ sam_model = None
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
 bot = None
+
+# Açıklama: Telegram bot durumunu logla
+logger.info(f"Telegram bot token: {'SET' if TELEGRAM_BOT_TOKEN else 'NOT SET'}")
+logger.info(f"Telegram chat ID: {'SET' if TELEGRAM_CHAT_ID else 'NOT SET'}")
+
 if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
-    bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
+    try:
+        bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
+        logger.info("Telegram bot initialized successfully!")
+    except Exception as e:
+        logger.error(f"Telegram bot initialization error: {e}")
+        bot = None
+else:
+    logger.warning("Telegram bot not configured - notifications disabled")
 
 # Açıklama: İstatistik değişkenleri
 request_count = 0
@@ -90,16 +102,25 @@ def load_models():
 # Açıklama: Telegram bildirim fonksiyonu
 def send_telegram_message(message):
     """Telegram'a mesaj gönder"""
-    if bot and TELEGRAM_CHAT_ID:
-        try:
-            # Açıklama: Async fonksiyonu sync olarak çalıştır
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message))
-            loop.close()
-            logger.info(f"Telegram message sent: {message}")
-        except Exception as e:
-            logger.error(f"Telegram send error: {e}")
+    if not bot:
+        logger.warning("Telegram bot not available - message not sent")
+        return False
+    
+    if not TELEGRAM_CHAT_ID:
+        logger.warning("Telegram chat ID not set - message not sent")
+        return False
+    
+    try:
+        # Açıklama: Async fonksiyonu sync olarak çalıştır
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message))
+        loop.close()
+        logger.info(f"Telegram message sent successfully: {message[:50]}...")
+        return True
+    except Exception as e:
+        logger.error(f"Telegram send error: {e}")
+        return False
 
 # Açıklama: Sunucu durumu bildirimleri
 def notify_server_start():
@@ -375,6 +396,25 @@ def get_status():
         logger.error(f"Status check error: {e}")
         return jsonify({'status': 'error', 'error': str(e)}), 500
 
+# Açıklama: Test endpoint'i
+@app.route('/test-telegram', methods=['GET'])
+def test_telegram():
+    """Telegram bot test endpoint'i"""
+    try:
+        message = f"🧪 Test mesajı!\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n🌐 AI Garage Masking API"
+        success = send_telegram_message(message)
+        
+        return jsonify({
+            'success': success,
+            'message': 'Telegram test completed',
+            'bot_configured': bot is not None,
+            'chat_id_set': bool(TELEGRAM_CHAT_ID),
+            'token_set': bool(TELEGRAM_BOT_TOKEN)
+        })
+    except Exception as e:
+        logger.error(f"Telegram test error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 # Açıklama: Ana endpoint
 @app.route('/', methods=['GET'])
 def home():
@@ -385,7 +425,8 @@ def home():
         'endpoints': {
             'health': '/health',
             'mask': '/mask',
-            'status': '/status'
+            'status': '/status',
+            'test_telegram': '/test-telegram'
         },
         'note': 'SAM+YOLO-based vehicle masking with fallback to OpenCV'
     })
