@@ -59,7 +59,7 @@ start_time = datetime.now()
 
 # Açıklama: Model yükleme fonksiyonu
 def load_models():
-    """YOLO modelini yükle (SAM disk alanı yetersiz)"""
+    """SAM ve YOLO modellerini yükle"""
     global yolo_model, sam_predictor, sam_model
     
     try:
@@ -67,19 +67,36 @@ def load_models():
         yolo_model = YOLO('yolov8n.pt')
         logger.info("YOLO model loaded successfully!")
         
-        # Açıklama: SAM modeli disk alanı yetersiz olduğu için atlanıyor
-        logger.warning("SAM model skipped - disk space insufficient (2.4GB required)")
-        logger.info("Using YOLO + OpenCV fallback combination")
+        logger.info("Loading SAM-B model (smaller version)...")
+        # SAM-B model dosyasını indir (eğer yoksa) - daha küçük
+        sam_checkpoint = "sam_vit_b_01ec64.pth"
+        if not os.path.exists(sam_checkpoint):
+            logger.info("Downloading SAM-B model (1.4GB)...")
+            url = "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth"
+            response = requests.get(url, stream=True)
+            total_size = int(response.headers.get('content-length', 0))
+            downloaded = 0
+            
+            with open(sam_checkpoint, "wb") as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if total_size > 0:
+                            progress = (downloaded / total_size) * 100
+                            logger.info(f"SAM-B download progress: {progress:.1f}%")
+            
+            logger.info("SAM-B model download completed!")
         
-        sam_predictor = None
-        sam_model = None
+        logger.info("Initializing SAM-B model...")
+        sam_model = sam_model_registry["vit_b"](checkpoint=sam_checkpoint)
+        sam_predictor = SamPredictor(sam_model)
         
-        logger.info("YOLO model loaded successfully!")
+        logger.info("All models loaded successfully!")
         return True
         
     except Exception as e:
         logger.error(f"Model loading error: {e}")
-        logger.info("Falling back to OpenCV only")
         return False
 
 # Açıklama: Telegram bildirim fonksiyonu
@@ -139,13 +156,17 @@ def signal_handler(signum, frame):
 signal.signal(signal.SIGTERM, signal_handler)
 signal.signal(signal.SIGINT, signal_handler)
 
-# Açıklama: YOLO + OpenCV ile maskeleme fonksiyonu
+# Açıklama: SAM + YOLO ile gelişmiş maskeleme fonksiyonu
 def create_mask_with_sam_yolo(image_bytes):
-    """YOLO + OpenCV ile araç maskeleme (SAM disk alanı yetersiz)"""
+    """SAM + YOLO ile araç maskeleme"""
     try:
         # Açıklama: Model kontrolü
         if yolo_model is None:
             logger.error("YOLO model is not loaded!")
+            return create_fallback_mask(image_bytes)
+        
+        if sam_predictor is None:
+            logger.error("SAM predictor is not loaded!")
             return create_fallback_mask(image_bytes)
         
         # Açıklama: Bytes'i PIL Image'e çevir
@@ -161,7 +182,10 @@ def create_mask_with_sam_yolo(image_bytes):
             logger.warning("No vehicles detected, using fallback OpenCV method")
             return create_fallback_mask(image_bytes)
         
-        # Açıklama: En büyük araç için bounding box maskeleme
+        # Açıklama: SAM predictor'ı ayarla
+        sam_predictor.set_image(image_np)
+        
+        # Açıklama: En büyük araç için maskeleme
         largest_vehicle = None
         max_area = 0
         
@@ -179,29 +203,35 @@ def create_mask_with_sam_yolo(image_bytes):
         if largest_vehicle:
             x1, y1, x2, y2 = largest_vehicle
             
-            # Açıklama: Bounding box'ı maske olarak kullan
-            height, width = image_np.shape[:2]
-            mask = np.zeros((height, width), dtype=np.uint8)
+            # Açıklama: SAM için input point (araç merkezi)
+            center_x = int((x1 + x2) / 2)
+            center_y = int((y1 + y2) / 2)
             
-            # Açıklama: Bounding box'ı doldur
-            cv2.rectangle(mask, (int(x1), int(y1)), (int(x2), int(y2)), 255, -1)
+            # Açıklama: SAM ile maskeleme
+            input_point = np.array([[center_x, center_y]])
+            input_label = np.array([1])  # 1 = foreground
             
-            # Açıklama: Morphological operations ile maskeyi iyileştir
-            kernel = np.ones((5, 5), np.uint8)
-            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
-            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
+            masks, scores, logits = sam_predictor.predict(
+                point_coords=input_point,
+                point_labels=input_label,
+                multimask_output=True
+            )
+            
+            # Açıklama: En yüksek skorlu maskeyi seç
+            best_mask_idx = np.argmax(scores)
+            mask = masks[best_mask_idx]
             
             # Açıklama: Maskeyi 3 kanala genişlet
-            mask_3channel = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+            mask_3channel = np.stack([mask, mask, mask], axis=2).astype(np.uint8) * 255
             
-            logger.info(f"YOLO+OpenCV mask created successfully with shape: {mask_3channel.shape}")
+            logger.info(f"SAM+YOLO mask created successfully with shape: {mask_3channel.shape}")
             return mask_3channel
         else:
             logger.warning("No valid vehicle detected, using fallback")
             return create_fallback_mask(image_bytes)
             
     except Exception as e:
-        logger.error(f"YOLO+OpenCV masking error: {e}")
+        logger.error(f"SAM+YOLO masking error: {e}")
         logger.info("Falling back to OpenCV method")
         return create_fallback_mask(image_bytes)
 
