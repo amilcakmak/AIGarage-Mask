@@ -4,4 +4,11 @@ torch --index-url https://download.pytorch.org/whl/cpu
 torchvision --index-url https://download.pytorch.org/whl/cpu
 
 #Diğer gerekli kütüphaneler
-ultralytics numpy opencv-python-headless Flask requests gunicorn Pillow flask-cors
+ultralytics 
+numpy 
+opencv-python-headless 
+Flask 
+requests 
+gunicorn 
+Pillow 
+flask-cors
